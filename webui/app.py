@@ -24,7 +24,23 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)
 
-# Global variables to store models
+# SECURITY: Add security headers to all responses
+@app.after_request
+def add_security_headers(response):
+    """Add security HTTP headers to all responses"""
+    # Prevent clickjacking attacks
+    response.headers['X-Frame-Options'] = 'DENY'
+    # Prevent MIME type sniffing
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    # XSS protection for older browsers
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    # Referrer policy
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    # Content Security Policy (basic)
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    return response
+
+# SECURITY: Global variables to store models (initialized lazily)
 tokenizer = None
 model = None
 predictor = None
@@ -76,51 +92,79 @@ def load_data_files():
     return data_files
 
 def load_data_file(file_path):
-    """Load data file"""
+    """Load data file with path traversal protection"""
+    # SECURITY: Validate and sanitize file path to prevent directory traversal attacks
+    allowed_extensions = ('.csv', '.feather')
+    
+    # Check file extension
+    if not any(file_path.lower().endswith(ext) for ext in allowed_extensions):
+        return None, "Unsupported file format"
+    
+    # SECURITY: Resolve to absolute path and ensure it's within allowed directory
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
     try:
-        if file_path.endswith('.csv'):
-            df = pd.read_csv(file_path)
-        elif file_path.endswith('.feather'):
-            df = pd.read_feather(file_path)
+        # Get absolute path of the requested file
+        abs_file_path = os.path.abspath(file_path)
+        
+        # SECURITY: Ensure the file is within the allowed data directory
+        if not abs_file_path.startswith(data_dir):
+            return None, "Access denied: File must be within the data directory"
+        
+        # SECURITY: Check if file exists and is readable
+        if not os.path.isfile(abs_file_path):
+            return None, "File does not exist"
+        
+        # SECURITY: Check for symlinks that might escape the data directory
+        real_file_path = os.path.realpath(abs_file_path)
+        if not real_file_path.startswith(os.path.realpath(data_dir)):
+            return None, "Access denied: Symlink escapes data directory"
+        
+        # Load the validated file
+        if abs_file_path.endswith('.csv'):
+            df = pd.read_csv(abs_file_path)
+        elif abs_file_path.endswith('.feather'):
+            df = pd.read_feather(abs_file_path)
         else:
             return None, "Unsupported file format"
-        
-        # Check required columns
-        required_cols = ['open', 'high', 'low', 'close']
-        if not all(col in df.columns for col in required_cols):
-            return None, f"Missing required columns: {required_cols}"
-        
-        # Process timestamp column
-        if 'timestamps' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['timestamps'])
-        elif 'timestamp' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['timestamp'])
-        elif 'date' in df.columns:
-            # If column name is 'date', rename it to 'timestamps'
-            df['timestamps'] = pd.to_datetime(df['date'])
-        else:
-            # If no timestamp column exists, create one
-            df['timestamps'] = pd.date_range(start='2024-01-01', periods=len(df), freq='1H')
-        
-        # Ensure numeric columns are numeric type
-        for col in ['open', 'high', 'low', 'close']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Process volume column (optional)
-        if 'volume' in df.columns:
-            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-        
-        # Process amount column (optional, but not used for prediction)
-        if 'amount' in df.columns:
-            df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-        
-        # Remove rows containing NaN values
-        df = df.dropna()
-        
-        return df, None
-        
+    except PermissionError:
+        return None, "Access denied: Cannot read file"
     except Exception as e:
-        return None, f"Failed to load file: {str(e)}"
+        # Don't expose internal error details to client
+        return None, "Failed to load file"
+    
+    # Process the loaded dataframe - validate and normalize data
+    required_cols = ['open', 'high', 'low', 'close']
+    if not all(col in df.columns for col in required_cols):
+        return None, f"Missing required columns: {required_cols}"
+    
+    # Process timestamp column
+    if 'timestamps' in df.columns:
+        df['timestamps'] = pd.to_datetime(df['timestamps'])
+    elif 'timestamp' in df.columns:
+        df['timestamps'] = pd.to_datetime(df['timestamp'])
+    elif 'date' in df.columns:
+        # If column name is 'date', rename it to 'timestamps'
+        df['timestamps'] = pd.to_datetime(df['date'])
+    else:
+        # If no timestamp column exists, create one
+        df['timestamps'] = pd.date_range(start='2024-01-01', periods=len(df), freq='1H')
+    
+    # Ensure numeric columns are numeric type
+    for col in ['open', 'high', 'low', 'close']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Process volume column (optional)
+    if 'volume' in df.columns:
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    
+    # Process amount column (optional, but not used for prediction)
+    if 'amount' in df.columns:
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+    
+    # Remove rows containing NaN values
+    df = df.dropna()
+    
+    return df, None
 
 def save_prediction_results(file_path, prediction_type, prediction_results, actual_data, input_data, prediction_params):
     """Save prediction results to file"""
@@ -705,4 +749,5 @@ if __name__ == '__main__':
     else:
         print("Tip: Will use simulated data for demonstration")
     
-    app.run(debug=True, host='0.0.0.0', port=7070)
+    # SECURITY: Disable debug mode in production and bind to localhost only
+    app.run(debug=False, host='127.0.0.1', port=7070)

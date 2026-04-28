@@ -1,7 +1,22 @@
+# Web UI dependencies
 flask==2.3.3
 flask-cors==4.0.0
+
+# Security dependencies (optional but recommended for production)
+python-dotenv>=1.0.0  # For managing environment variables securely
+
+# Data processing
 pandas==2.2.2
 numpy>=1.26.0
+
+# Visualization
 plotly==5.17.0
+
+# ML dependencies
 torch>=2.1.0
 huggingface_hub==0.33.1
+
+# Security: Add rate limiting for production use
+# Install with: pip install flask-limiter
+# Uncomment below when needed:
+# flask-limiter>=3.6.0
